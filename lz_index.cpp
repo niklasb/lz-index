@@ -11,7 +11,7 @@ using namespace sdsl;
 
 template<class A, class B>
 ostream& operator<<(ostream& os, const std::pair<A, B>& p) {
-    return os << "(" << p.first << ", " << p.second << ")";
+  return os << "(" << p.first << ", " << p.second << ")";
 }
 
 template<typename T, typename Idx>
