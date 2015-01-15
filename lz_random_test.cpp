@@ -23,10 +23,10 @@ int main() {
   // test against brute force
   for (auto s: test_strings) {
     cout << "testing " << s << endl;
-    sdsl::forward_trie ft;
+    sdsl::lz_forward_trie ft;
     ft.lz_insert(begin(s), end(s));
-    sdsl::rev_trie rt(ft);
-    sdsl::succinct_lzindex lz(ft, rt);
+    sdsl::lz_rev_trie rt(ft);
+    sdsl::lz_index lz(ft, rt);
 
     map<string, vector<int>> substrs;
     for (int i = 0; i < s.size(); ++i)

@@ -5,6 +5,7 @@
 #include <utility>
 #include <unordered_set>
 #include <unordered_map>
+#include <map>
 
 template<class A, class B>
 std::ostream& operator<<(std::ostream& os, const std::pair<A, B>& p) {
@@ -21,13 +22,13 @@ namespace sdsl {
     ram_fs::remove(tmp_file);
   }
 
-  class forward_trie {
+  class lz_forward_trie {
   public:
     struct node {
       int par;
       int par_edge;
       int offset;
-      std::unordered_map<int,int> adj;
+      std::map<int,int> adj;
       node(int par=0, int par_edge=0, int offset=0)
         : par(par), par_edge(par_edge), offset(offset) {}
     };
@@ -48,7 +49,7 @@ namespace sdsl {
     }
 
   public:
-    forward_trie() : nodes(1) {}
+    lz_forward_trie() : nodes(1) {}
 
     template<typename It>
     void lz_insert(It a, It b) {
@@ -90,18 +91,18 @@ namespace sdsl {
     }
   };
 
-  class rev_trie {
+  class lz_rev_trie {
   public:
     struct edge {
       int forward_node, len;
     };
     struct node {
       int id;
-      std::unordered_map<int,int> adj;
+      std::map<int,int> adj;
       std::vector<std::pair<edge, int>> edges;
       node(int id=0): id(id) {}
     };
-    const forward_trie& ft;
+    const lz_forward_trie& ft;
     std::vector<node> nodes;
 
   private:
@@ -194,7 +195,7 @@ namespace sdsl {
     }
 
   public:
-    rev_trie(const forward_trie& ft) : ft(ft), nodes(1) {
+    lz_rev_trie(const lz_forward_trie& ft) : ft(ft), nodes(1) {
       for (int i = 0; i < ft.nodes.size(); ++i) {
         //print(cout);
         //cout << "============" << endl;
@@ -223,16 +224,18 @@ namespace sdsl {
     }
   };
 
-  class succinct_lzindex {
+  class lz_index {
   public:
+    using size_type = int;
     bit_vector ft_bp, rt_bp;
     bp_support_sada<> ft_bp_support, rt_bp_support;
     rank_support_v5<10,2> rt_bp_rank10;
     select_support_mcl<10,2> rt_bp_select10;
     int_vector<> ft_edge, ft_ids, ft_id_to_tree, ft_offset, rt_ids;
     wt_int<> succ_wt;
+    int invalid_id;
 
-    succinct_lzindex(const forward_trie& ft, const rev_trie& rt)
+    lz_index(const lz_forward_trie& ft, const lz_rev_trie& rt)
       : ft_bp(ft.nodes.size()*2, 0)
       , rt_bp(rt.nodes.size()*2, 0)
       , ft_edge(ft.nodes.size())
@@ -240,6 +243,7 @@ namespace sdsl {
       , ft_id_to_tree(ft.nodes.size())
       , ft_offset(ft.nodes.size())
       , rt_ids(rt.nodes.size())
+      , invalid_id(ft.nodes.size()*2)
     {
       int paren_idx, node_idx;
       paren_idx = node_idx = 0;
@@ -248,7 +252,7 @@ namespace sdsl {
         [&](int v, int par_edge) {
           //cout << v << " ";
           ft_bp[paren_idx] = 1;
-          ft_edge[node_idx] = par_edge;
+          ft_edge[node_idx] = (par_edge >= 0) ? par_edge : 0;
           ft_id_to_tree[v] = paren_idx;
           ft_ids[node_idx] = v;
           ft_offset[node_idx] = ft.nodes[v].offset;
@@ -266,22 +270,21 @@ namespace sdsl {
       paren_idx = node_idx = 0;
       //cout << ft_id_to_tree.size() << endl;
       //cout << "revtrie pre-order " << endl;
-      int no_succ = ft.nodes.size()*2 + 1;
       int_vector<> succ_iv(rt.nodes.size());
       rt.dfs(
-        [&](int v, const rev_trie::edge& par_edge) {
+        [&](int v, const lz_rev_trie::edge& par_edge) {
           //cout << v << " ";
           rt_bp[paren_idx] = 1;
           int id = rt.nodes[v].id;
-          rt_ids[node_idx] = (id != -1) ? ft_id_to_tree[id] : -1;
+          rt_ids[node_idx] = (id != -1) ? ft_id_to_tree[id] : invalid_id;
           succ_iv[node_idx] =
               (id != -1 && id + 1 < ft_id_to_tree.size())
                 ? ft_id_to_tree[id + 1]
-                : no_succ;
+                : invalid_id;
           paren_idx++;
           node_idx++;
         },
-        [&](int v, const rev_trie::edge& par_edge) {
+        [&](int v, const lz_rev_trie::edge& par_edge) {
           rt_bp[paren_idx++] = 0;
         });
       //cout << endl;
@@ -298,6 +301,11 @@ namespace sdsl {
       util::init_support(rt_bp_rank10, &rt_bp);
       util::init_support(rt_bp_select10, &rt_bp);
       construct_from_iv<>(succ_wt, succ_iv);
+      util::bit_compress(ft_edge);
+      util::bit_compress(ft_ids);
+      util::bit_compress(ft_id_to_tree);
+      util::bit_compress(ft_offset);
+      util::bit_compress(rt_ids);
     }
 
     int trie_edge(int x) {
@@ -383,7 +391,7 @@ namespace sdsl {
       //cout << "b0 revtrie = " << revtrie_select_leaf(rank_first_leaf) << endl;
       int b0 = revtrie_to_trie(revtrie_select_leaf(rank_first_leaf));
       int b1 = revtrie_to_trie(y);
-      if (b1 == -1) {
+      if (b1 == invalid_id) {
         // there has to be a second leaf
         //cout << "b1 revtrie = " << revtrie_select_leaf(rank_first_leaf + 1) << endl;
         b1 = revtrie_to_trie(revtrie_select_leaf(rank_first_leaf + 1));
@@ -461,7 +469,7 @@ namespace sdsl {
       if (subtree == -1) return;
       dfs(rt_bp, subtree, [&](int y, int _) {
         int x = revtrie_to_trie(y);
-        if (x == -1)
+        if (x == invalid_id)
           return;
         dfs(ft_bp, x, [&](int x, int depth_x) {
           report(trie_offset(x) + trie_depth(x) - n - depth_x);
@@ -567,6 +575,27 @@ namespace sdsl {
       case1(a, b, report);
       case2(a, b, report);
       case3(a, b, report);
+    }
+
+    int serialize(std::ostream& out, structure_tree_node* v, std::string name) const {
+      structure_tree_node* child = structure_tree::add_child(v, name, util::class_name(*this));
+      int written_bytes = 0;
+#define SERIALIZE_FIELD(n) written_bytes += n.serialize(out, child, #n)
+      SERIALIZE_FIELD(ft_bp);
+      SERIALIZE_FIELD(ft_bp_support);
+      SERIALIZE_FIELD(ft_edge);
+      SERIALIZE_FIELD(ft_ids);
+      SERIALIZE_FIELD(ft_id_to_tree);
+      SERIALIZE_FIELD(ft_offset);
+      SERIALIZE_FIELD(rt_bp);
+      SERIALIZE_FIELD(rt_bp_support);
+      SERIALIZE_FIELD(rt_bp_rank10);
+      SERIALIZE_FIELD(rt_bp_select10);
+      SERIALIZE_FIELD(rt_ids);
+      SERIALIZE_FIELD(succ_wt);
+      structure_tree::add_size(child, written_bytes);
+      return written_bytes;
+#undef SERIALIZE_FIELD
     }
   };
 }
