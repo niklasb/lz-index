@@ -1,6 +1,7 @@
 #include <sdsl/wavelet_trees.hpp>
 #include <sdsl/bit_vectors.hpp>
 #include <sdsl/bp_support.hpp>
+#include <sdsl/inv_perm_support.hpp>
 #include <iostream>
 #include <utility>
 #include <unordered_set>
@@ -227,42 +228,49 @@ namespace sdsl {
   class lz_index {
   public:
     using size_type = int;
+    int num_nodes, num_rev_nodes;
     bit_vector ft_bp, rt_bp;
     bp_support_sada<> ft_bp_support, rt_bp_support;
     rank_support_v5<10,2> rt_bp_rank10;
     select_support_mcl<10,2> rt_bp_select10;
-    int_vector<> ft_edge, ft_ids, ft_id_to_tree, ft_offset, rt_ids;
-    wt_int<> succ_wt;
-    int invalid_id;
+    int_vector<> ft_edge, ft_ids, rt_ids;
+    inv_perm_support<> ft_id_to_tree;
+    wt_int<rrr_vector<63>> succ_wt;
+    enc_vector<> ft_offset;
 
     lz_index(const lz_forward_trie& ft, const lz_rev_trie& rt)
-      : ft_bp(ft.nodes.size()*2, 0)
-      , rt_bp(rt.nodes.size()*2, 0)
-      , ft_edge(ft.nodes.size())
-      , ft_ids(ft.nodes.size())
-      , ft_id_to_tree(ft.nodes.size())
-      , ft_offset(ft.nodes.size())
+      : num_nodes(ft.nodes.size())
+      , num_rev_nodes(rt.nodes.size())
+      , ft_bp(num_nodes*2, 0)
+      , rt_bp(num_rev_nodes*2, 0)
+      , ft_edge(num_nodes)
+      , ft_ids(num_nodes)
       , rt_ids(rt.nodes.size())
-      , invalid_id(ft.nodes.size()*2)
     {
       int paren_idx, node_idx;
       paren_idx = node_idx = 0;
       //cout << "lztrie pre-order " << endl;
-      ft.dfs(
-        [&](int v, int par_edge) {
-          //cout << v << " ";
-          ft_bp[paren_idx] = 1;
-          ft_edge[node_idx] = (par_edge >= 0) ? par_edge : 0;
-          ft_id_to_tree[v] = paren_idx;
-          ft_ids[node_idx] = v;
-          ft_offset[node_idx] = ft.nodes[v].offset;
-          paren_idx++;
-          node_idx++;
-        },
-        [&](int v, int par_edge) {
-          ft_bp[paren_idx++] = 0;
-        });
+      {
+        int_vector<> _ft_offset(num_nodes);
+        ft.dfs(
+          [&](int v, int par_edge) {
+            //cout << v << " ";
+            ft_bp[paren_idx] = 1;
+            ft_edge[node_idx] = (par_edge >= 0) ? par_edge : 0;
+            ft_ids[node_idx] = v;
+            _ft_offset[v] = ft.nodes[v].offset;
+            paren_idx++;
+            node_idx++;
+          },
+          [&](int v, int par_edge) {
+            ft_bp[paren_idx++] = 0;
+          });
+        util::assign(ft_offset, enc_vector<>(_ft_offset));
+      }
       util::assign(ft_bp_support, bp_support_sada<>(&ft_bp));
+      util::bit_compress(ft_edge);
+      util::bit_compress(ft_ids);
+      util::init_support(ft_id_to_tree, &ft_ids);
       //cout << endl;
       //cout << "trie seq" << endl;
       //for (int i = 0; i < ft_bp.size(); ++i)
@@ -271,24 +279,30 @@ namespace sdsl {
       paren_idx = node_idx = 0;
       //cout << ft_id_to_tree.size() << endl;
       //cout << "revtrie pre-order " << endl;
-      int_vector<> succ_iv(rt.nodes.size());
-      int no_succ = ft.nodes.size();
-      rt.dfs(
-        [&](int v, const lz_rev_trie::edge& par_edge) {
-          //cout << v << " ";
-          rt_bp[paren_idx] = 1;
-          int id = rt.nodes[v].id;
-          rt_ids[node_idx] = (id != -1) ? ft_id_to_tree[id] : invalid_id;
-          succ_iv[node_idx] =
-              (id != -1 && id + 1 < ft_id_to_tree.size())
-                ? (ft_bp_support.rank(ft_id_to_tree[id + 1]) - 1)
-                : no_succ;
-          paren_idx++;
-          node_idx++;
-        },
-        [&](int v, const lz_rev_trie::edge& par_edge) {
-          rt_bp[paren_idx++] = 0;
-        });
+      {
+        int_vector<> succ_iv(num_rev_nodes);
+        rt.dfs(
+          [&](int v, const lz_rev_trie::edge& par_edge) {
+            //cout << v << " ";
+            rt_bp[paren_idx] = 1;
+            int id = rt.nodes[v].id;
+            rt_ids[node_idx] = (id != -1) ? ft_id_to_tree[id] : num_nodes;
+            succ_iv[node_idx] =
+                (id != -1 && id + 1 < ft_id_to_tree.size())
+                  ? ft_id_to_tree[id + 1]
+                  : num_nodes;
+            paren_idx++;
+            node_idx++;
+          },
+          [&](int v, const lz_rev_trie::edge& par_edge) {
+            rt_bp[paren_idx++] = 0;
+          });
+        construct_from_iv<>(succ_wt, succ_iv);
+      }
+      util::bit_compress(rt_ids);
+      util::assign(rt_bp_support, bp_support_sada<>(&rt_bp));
+      util::init_support(rt_bp_rank10, &rt_bp);
+      util::init_support(rt_bp_select10, &rt_bp);
       //cout << endl;
       //cout << "revtrie seq" << endl;
       //for (int i = 0; i < rt_bp.size(); ++i)
@@ -298,15 +312,10 @@ namespace sdsl {
       //for (int i = 0; i < succ_iv.size(); ++i)
         //cout << succ_iv[i] << " ";
       //cout << endl;
-      util::assign(rt_bp_support, bp_support_sada<>(&rt_bp));
-      util::init_support(rt_bp_rank10, &rt_bp);
-      util::init_support(rt_bp_select10, &rt_bp);
-      construct_from_iv<>(succ_wt, succ_iv);
-      util::bit_compress(ft_edge);
-      util::bit_compress(ft_ids);
-      util::bit_compress(ft_id_to_tree);
-      util::bit_compress(ft_offset);
-      util::bit_compress(rt_ids);
+    }
+
+    int trie_id(int x) {
+      return ft_ids[ft_bp_support.rank(x) - 1];
     }
 
     int trie_edge(int x) {
@@ -314,11 +323,7 @@ namespace sdsl {
     }
 
     int trie_offset(int x) {
-      return ft_offset[ft_bp_support.rank(x) - 1];
-    }
-
-    int trie_id(int x) {
-      return ft_ids[ft_bp_support.rank(x) - 1];
+      return ft_offset[trie_id(x)];
     }
 
     int trie_child(int x, int c) {
@@ -377,7 +382,9 @@ namespace sdsl {
     }
 
     int revtrie_to_trie(int y) {
-      return rt_ids[rt_bp_support.rank(y) - 1];
+      int forward_id = rt_ids[rt_bp_support.rank(y) - 1];
+      if (forward_id == num_nodes) return ft_bp.size();
+      return ft_bp_support.select(forward_id + 1);
     }
 
     // i == 1-based
@@ -392,7 +399,7 @@ namespace sdsl {
       //cout << "b0 revtrie = " << revtrie_select_leaf(rank_first_leaf) << endl;
       int b0 = revtrie_to_trie(revtrie_select_leaf(rank_first_leaf));
       int b1 = revtrie_to_trie(y);
-      if (b1 == invalid_id) {
+      if (b1 == ft_bp.size()) {
         // there has to be a second leaf
         //cout << "b1 revtrie = " << revtrie_select_leaf(rank_first_leaf + 1) << endl;
         b1 = revtrie_to_trie(revtrie_select_leaf(rank_first_leaf + 1));
@@ -470,7 +477,7 @@ namespace sdsl {
       if (subtree == -1) return;
       dfs(rt_bp, subtree, [&](int y, int _) {
         int x = revtrie_to_trie(y);
-        if (x == invalid_id)
+        if (x == ft_bp.size())
           return;
         dfs(ft_bp, x, [&](int x, int depth_x) {
           report(trie_offset(x) + trie_depth(x) - n - depth_x);
@@ -493,7 +500,7 @@ namespace sdsl {
             b2 = ft_bp_support.rank(ft_bp_support.find_close(x)) - 1;
         //cout << "a1 a2 b1 b2 = " << a1 << " " << a2 << " " << b1 << " " << b2 << endl;
         for (auto point : succ_wt.range_search_2d(a1, a2, b1, b2).second)
-          report(ft_offset[point.second] - i);
+          report(ft_offset[ft_ids[point.second]] - i);
       }
     }
 
@@ -523,7 +530,7 @@ namespace sdsl {
             // there is no previous block but pattern continues towards the left
             goto fail;
           if (id > 1) {
-            prev_x = ft_id_to_tree[id - 1];
+            prev_x = ft_bp_support.select(ft_id_to_tree[id - 1] + 1);
             prev_sz = trie_depth(prev_x);
             if (l >= prev_sz)
               // previous block is fully covered
@@ -540,7 +547,7 @@ namespace sdsl {
             covered_blocks++;
             if (id >= ft_id_to_tree.size())
               goto fail;
-            int x = ft_id_to_tree[id];
+            int x = ft_bp_support.select(ft_id_to_tree[id] + 1);
             int sz = trie_depth(x);
             //cout << "id i x sz = " << id << " " << i << " " << x << " " << sz << endl;
             if (sz <= n - i) {
