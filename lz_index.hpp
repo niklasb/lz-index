@@ -262,6 +262,7 @@ namespace sdsl {
         [&](int v, int par_edge) {
           ft_bp[paren_idx++] = 0;
         });
+      util::assign(ft_bp_support, bp_support_sada<>(&ft_bp));
       //cout << endl;
       //cout << "trie seq" << endl;
       //for (int i = 0; i < ft_bp.size(); ++i)
@@ -271,6 +272,7 @@ namespace sdsl {
       //cout << ft_id_to_tree.size() << endl;
       //cout << "revtrie pre-order " << endl;
       int_vector<> succ_iv(rt.nodes.size());
+      int no_succ = ft.nodes.size();
       rt.dfs(
         [&](int v, const lz_rev_trie::edge& par_edge) {
           //cout << v << " ";
@@ -279,8 +281,8 @@ namespace sdsl {
           rt_ids[node_idx] = (id != -1) ? ft_id_to_tree[id] : invalid_id;
           succ_iv[node_idx] =
               (id != -1 && id + 1 < ft_id_to_tree.size())
-                ? ft_id_to_tree[id + 1]
-                : invalid_id;
+                ? (ft_bp_support.rank(ft_id_to_tree[id + 1]) - 1)
+                : no_succ;
           paren_idx++;
           node_idx++;
         },
@@ -296,7 +298,6 @@ namespace sdsl {
       //for (int i = 0; i < succ_iv.size(); ++i)
         //cout << succ_iv[i] << " ";
       //cout << endl;
-      util::assign(ft_bp_support, bp_support_sada<>(&ft_bp));
       util::assign(rt_bp_support, bp_support_sada<>(&rt_bp));
       util::init_support(rt_bp_rank10, &rt_bp);
       util::init_support(rt_bp_select10, &rt_bp);
@@ -488,11 +489,11 @@ namespace sdsl {
         //cout << "i y x " << i << " " << y << " " << x << endl;
         int a1 = rt_bp_support.rank(y) - 1,
             a2 = rt_bp_support.rank(rt_bp_support.find_close(y)) - 1,
-            b1 = x,
-            b2 = ft_bp_support.find_close(x);
+            b1 = ft_bp_support.rank(x) - 1,
+            b2 = ft_bp_support.rank(ft_bp_support.find_close(x)) - 1;
         //cout << "a1 a2 b1 b2 = " << a1 << " " << a2 << " " << b1 << " " << b2 << endl;
         for (auto point : succ_wt.range_search_2d(a1, a2, b1, b2).second)
-          report(trie_offset(point.second) - i);
+          report(ft_offset[point.second] - i);
       }
     }
 
