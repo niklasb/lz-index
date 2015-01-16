@@ -236,7 +236,8 @@ namespace sdsl {
     int_vector<> ft_edge, ft_ids, rt_ids;
     inv_perm_support<> ft_id_to_tree;
     wt_int<rrr_vector<63>> succ_wt;
-    enc_vector<> ft_offset;
+    sd_vector<> ft_offset;
+    select_support_sd<> ft_offset_select;
 
     lz_index(const lz_forward_trie& ft, const lz_rev_trie& rt)
       : num_nodes(ft.nodes.size())
@@ -251,26 +252,28 @@ namespace sdsl {
       paren_idx = node_idx = 0;
       //cout << "lztrie pre-order " << endl;
       {
-        int_vector<> _ft_offset(num_nodes);
+        bit_vector ft_offset_bits(ft.nodes.back().offset + 1);
         ft.dfs(
           [&](int v, int par_edge) {
             //cout << v << " ";
             ft_bp[paren_idx] = 1;
             ft_edge[node_idx] = (par_edge >= 0) ? par_edge : 0;
             ft_ids[node_idx] = v;
-            _ft_offset[v] = ft.nodes[v].offset;
+            ft_offset_bits[ft.nodes[v].offset] = 1;
             paren_idx++;
             node_idx++;
           },
           [&](int v, int par_edge) {
             ft_bp[paren_idx++] = 0;
           });
-        util::assign(ft_offset, enc_vector<>(_ft_offset));
+        util::assign(ft_offset, sd_vector<>(ft_offset_bits));
       }
       util::assign(ft_bp_support, bp_support_sada<>(&ft_bp));
       util::bit_compress(ft_edge);
       util::bit_compress(ft_ids);
       util::init_support(ft_id_to_tree, &ft_ids);
+      util::init_support(ft_id_to_tree, &ft_ids);
+      util::init_support(ft_offset_select, &ft_offset);
       //cout << endl;
       //cout << "trie seq" << endl;
       //for (int i = 0; i < ft_bp.size(); ++i)
@@ -323,7 +326,7 @@ namespace sdsl {
     }
 
     int trie_offset(int x) {
-      return ft_offset[trie_id(x)];
+      return ft_offset_select.select(trie_id(x));
     }
 
     int trie_child(int x, int c) {
@@ -500,7 +503,7 @@ namespace sdsl {
             b2 = ft_bp_support.rank(ft_bp_support.find_close(x)) - 1;
         //cout << "a1 a2 b1 b2 = " << a1 << " " << a2 << " " << b1 << " " << b2 << endl;
         for (auto point : succ_wt.range_search_2d(a1, a2, b1, b2).second)
-          report(ft_offset[ft_ids[point.second]] - i);
+          report(ft_offset_select.select(ft_ids[point.second]) - i);
       }
     }
 
@@ -595,6 +598,7 @@ namespace sdsl {
       SERIALIZE_FIELD(ft_ids);
       SERIALIZE_FIELD(ft_id_to_tree);
       SERIALIZE_FIELD(ft_offset);
+      SERIALIZE_FIELD(ft_offset_select);
       SERIALIZE_FIELD(rt_bp);
       SERIALIZE_FIELD(rt_bp_support);
       SERIALIZE_FIELD(rt_bp_rank10);
